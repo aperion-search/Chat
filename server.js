@@ -31,55 +31,63 @@ const P1_PASS = process.env.PARTNER_1_PASS || 'pass1234';
 const P2_NAME = process.env.PARTNER_2_NAME || 'Partner B';
 const P2_PASS = process.env.PARTNER_2_PASS || 'pass5678';
 
+// Replace getMegaStorage, syncFromMega, and syncToMega in server.js with this:
+
 async function getMegaStorage() {
-  const storage = new Storage({
-    email: process.env.MEGA_EMAIL,
-    password: process.env.MEGA_PASSWORD
-  });
-  await storage.ready;
-  return storage;
+  const email = process.env.MEGA_EMAIL;
+  const password = process.env.MEGA_PASSWORD;
+
+  // Check if credentials exist before connecting
+  if (!email || !password) {
+    console.log('MEGA credentials missing. Using local storage only.');
+    return null;
+  }
+
+  try {
+    const storage = new Storage({ email, password });
+    await storage.ready;
+    return storage;
+  } catch (err) {
+    console.error('MEGA Login Failed:', err.message);
+    return null;
+  }
 }
 
 async function syncFromMega() {
   try {
     const storage = await getMegaStorage();
-    const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
-    if (file) {
-      const data = await file.downloadBuffer();
-      fs.writeFileSync(JSON_FILE_PATH, data);
-    } else if (!fs.existsSync(JSON_FILE_PATH)) {
-      fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
+    if (storage) {
+      const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
+      if (file) {
+        const data = await file.downloadBuffer();
+        fs.writeFileSync(JSON_FILE_PATH, data);
+      }
     }
   } catch (err) {
-    if (!fs.existsSync(JSON_FILE_PATH)) {
-      fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
-    }
+    console.error('Sync from MEGA error:', err.message);
   }
+
+  // Fallback: Initialize database if it doesn't exist
+  if (!fs.existsSync(JSON_FILE_PATH)) {
+    fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
+  }
+
   await updatePartnerCredentials();
-}
-
-async function updatePartnerCredentials() {
-  let data = readData();
-  const hash1 = await bcrypt.hash(P1_PASS, 10);
-  const hash2 = await bcrypt.hash(P2_PASS, 10);
-
-  data.users = [
-    { username: P1_NAME, passwordHash: hash1 },
-    { username: P2_NAME, passwordHash: hash2 }
-  ];
-
-  fs.writeFileSync(JSON_FILE_PATH, JSON.stringify(data, null, 2));
-  await syncToMega();
 }
 
 async function syncToMega() {
   try {
     const storage = await getMegaStorage();
+    if (!storage) return;
+
     const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
     if (file) await file.delete();
+    
     const content = fs.readFileSync(JSON_FILE_PATH);
     await storage.upload(MEGA_FILE_NAME, content).complete;
-  } catch (err) { console.error('MEGA Sync Error:', err); }
+  } catch (err) {
+    console.error('Sync to MEGA error:', err.message);
+  }
 }
 
 function readData() {
