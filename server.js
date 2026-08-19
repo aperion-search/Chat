@@ -7,7 +7,6 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
-const { Storage } = require('megajs');
 
 const app = express();
 const server = http.createServer(app);
@@ -31,43 +30,42 @@ const P1_PASS = process.env.PARTNER_1_PASS || 'pass1234';
 const P2_NAME = process.env.PARTNER_2_NAME || 'Partner B';
 const P2_PASS = process.env.PARTNER_2_PASS || 'pass5678';
 
-// SAFE MEGA INITIALIZATION
+// Strict check: Only load megajs if both variables are non-empty strings
 async function getMegaStorage() {
-  const email = (process.env.MEGA_EMAIL || '').trim();
-  const password = (process.env.MEGA_PASSWORD || '').trim();
+  const email = process.env.MEGA_EMAIL;
+  const password = process.env.MEGA_PASSWORD;
 
-  // If credentials are empty or missing, skip MEGA completely to avoid megajs crashes
-  if (!email || !password) {
-    console.log('MEGA_EMAIL or MEGA_PASSWORD missing/empty. Skipping MEGA cloud sync.');
+  if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password.trim()) {
+    console.log('MEGA credentials invalid or missing. Running with local disk storage.');
     return null;
   }
 
   try {
-    const storage = new Storage({ email, password });
+    const { Storage } = require('megajs');
+    const storage = new Storage({ email: email.trim(), password: password.trim() });
     await storage.ready;
     return storage;
   } catch (err) {
-    console.error('MEGA connection failed:', err.message);
+    console.error('MEGA connection error:', err.message);
     return null;
   }
 }
 
 async function syncFromMega() {
-  const storage = await getMegaStorage();
-  if (storage) {
-    try {
+  try {
+    const storage = await getMegaStorage();
+    if (storage) {
       const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
       if (file) {
         const data = await file.downloadBuffer();
         fs.writeFileSync(JSON_FILE_PATH, data);
-        console.log('Successfully loaded database from MEGA');
+        console.log('Data synced from MEGA.');
       }
-    } catch (err) {
-      console.error('Failed to download from MEGA:', err.message);
     }
+  } catch (err) {
+    console.error('Sync from MEGA failed:', err.message);
   }
 
-  // Fallback: create empty database if local file doesn't exist
   if (!fs.existsSync(JSON_FILE_PATH)) {
     fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
   }
@@ -75,18 +73,32 @@ async function syncFromMega() {
   await updatePartnerCredentials();
 }
 
-async function syncToMega() {
-  const storage = await getMegaStorage();
-  if (!storage) return;
+async function updatePartnerCredentials() {
+  let data = readData();
+  const hash1 = await bcrypt.hash(P1_PASS, 10);
+  const hash2 = await bcrypt.hash(P2_PASS, 10);
 
+  data.users = [
+    { username: P1_NAME, passwordHash: hash1 },
+    { username: P2_NAME, passwordHash: hash2 }
+  ];
+
+  fs.writeFileSync(JSON_FILE_PATH, JSON.stringify(data, null, 2));
+  await syncToMega();
+}
+
+async function syncToMega() {
   try {
+    const storage = await getMegaStorage();
+    if (!storage) return;
+
     const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
     if (file) await file.delete();
     
     const content = fs.readFileSync(JSON_FILE_PATH);
     await storage.upload(MEGA_FILE_NAME, content).complete;
   } catch (err) {
-    console.error('Failed to upload to MEGA:', err.message);
+    console.error('Sync to MEGA failed:', err.message);
   }
 }
 
@@ -97,7 +109,7 @@ function readData() {
 
 function checkUserAuth(req, res, next) {
   if (req.session && req.session.username) return next();
-  res.status(401).json({ status: 'error', message: 'Unauthorized. Please login.' });
+  res.status(401).json({ status: 'error', message: 'Unauthorized' });
 }
 
 function checkAdmin(req, res, next) {
