@@ -31,15 +31,14 @@ const P1_PASS = process.env.PARTNER_1_PASS || 'pass1234';
 const P2_NAME = process.env.PARTNER_2_NAME || 'Partner B';
 const P2_PASS = process.env.PARTNER_2_PASS || 'pass5678';
 
-// Replace getMegaStorage, syncFromMega, and syncToMega in server.js with this:
-
+// SAFE MEGA INITIALIZATION
 async function getMegaStorage() {
-  const email = process.env.MEGA_EMAIL;
-  const password = process.env.MEGA_PASSWORD;
+  const email = (process.env.MEGA_EMAIL || '').trim();
+  const password = (process.env.MEGA_PASSWORD || '').trim();
 
-  // Check if credentials exist before connecting
+  // If credentials are empty or missing, skip MEGA completely to avoid megajs crashes
   if (!email || !password) {
-    console.log('MEGA credentials missing. Using local storage only.');
+    console.log('MEGA_EMAIL or MEGA_PASSWORD missing/empty. Skipping MEGA cloud sync.');
     return null;
   }
 
@@ -48,26 +47,27 @@ async function getMegaStorage() {
     await storage.ready;
     return storage;
   } catch (err) {
-    console.error('MEGA Login Failed:', err.message);
+    console.error('MEGA connection failed:', err.message);
     return null;
   }
 }
 
 async function syncFromMega() {
-  try {
-    const storage = await getMegaStorage();
-    if (storage) {
+  const storage = await getMegaStorage();
+  if (storage) {
+    try {
       const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
       if (file) {
         const data = await file.downloadBuffer();
         fs.writeFileSync(JSON_FILE_PATH, data);
+        console.log('Successfully loaded database from MEGA');
       }
+    } catch (err) {
+      console.error('Failed to download from MEGA:', err.message);
     }
-  } catch (err) {
-    console.error('Sync from MEGA error:', err.message);
   }
 
-  // Fallback: Initialize database if it doesn't exist
+  // Fallback: create empty database if local file doesn't exist
   if (!fs.existsSync(JSON_FILE_PATH)) {
     fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
   }
@@ -76,17 +76,17 @@ async function syncFromMega() {
 }
 
 async function syncToMega() {
-  try {
-    const storage = await getMegaStorage();
-    if (!storage) return;
+  const storage = await getMegaStorage();
+  if (!storage) return;
 
+  try {
     const file = storage.root.children.find(f => f.name === MEGA_FILE_NAME);
     if (file) await file.delete();
     
     const content = fs.readFileSync(JSON_FILE_PATH);
     await storage.upload(MEGA_FILE_NAME, content).complete;
   } catch (err) {
-    console.error('Sync to MEGA error:', err.message);
+    console.error('Failed to upload to MEGA:', err.message);
   }
 }
 
