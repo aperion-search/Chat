@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lovers Chat</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111b21; color: #e9edef; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
+    .hidden { display: none !important; }
+    .auth-card { background: #202c33; padding: 24px; border-radius: 12px; text-align: center; width: 90%; max-width: 350px; margin: auto; }
+    .auth-card select, .auth-card input, .auth-card button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 8px; border: none; box-sizing: border-box; }
+    .auth-card select, .auth-card input { background: #2a3942; color: white; }
+    .auth-card button { background: #00a884; color: white; font-weight: bold; cursor: pointer; }
+    .header { background: #202c33; padding: 10px; display: flex; align-items: center; gap: 8px; }
+    .search-bar { background: #111b21; border: none; padding: 8px; border-radius: 8px; color: #fff; flex: 1; font-size: 14px; }
+    .icon-btn { background: none; border: none; font-size: 18px; cursor: pointer; color: #00a884; }
+    .chat-box { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: #0b141a; }
+    .msg { max-width: 80%; padding: 8px 12px; border-radius: 8px; font-size: 15px; word-wrap: break-word; }
+    .sent { background: #005c4b; align-self: flex-end; }
+    .received { background: #202c33; align-self: flex-start; }
+    .time { font-size: 10px; color: #8696a0; text-align: right; margin-top: 4px; }
+    .input-area { background: #202c33; padding: 10px; display: flex; gap: 6px; align-items: center; }
+    .input-area input[type="text"] { flex: 1; background: #2a3942; border: none; padding: 10px; border-radius: 8px; color: white; outline: none; }
+    .input-area button { background: #00a884; border: none; padding: 10px 14px; border-radius: 8px; color: white; font-weight: bold; }
+    audio, video { width: 100%; max-width: 250px; margin-top: 5px; border-radius: 6px; }
+    #video-modal { display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.9); z-index:99; flex-direction:column; align-items:center; justify-content:center; }
+    video.call-stream { width: 45%; max-height: 40vh; background: #000; border-radius: 8px; }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="loginSection" class="auth-card">
+    <h2>Lovers Login</h2>
+    <input type="text" id="loginUser" placeholder="Partner Name">
+    <input type="password" id="loginPass" placeholder="Password">
+    <button onclick="doLogin()">Login</button>
+  </div>
+
+  <!-- CHAT INTERFACE -->
+  <div id="chatSection" class="hidden" style="display:flex; flex-direction:column; height:100vh;">
+    <div class="header">
+      <input type="text" id="searchKey" class="search-bar" placeholder="Secret Key..." oninput="decryptAll()">
+      <button class="icon-btn" onclick="startCall(false)">📞</button>
+      <button class="icon-btn" onclick="startCall(true)">📹</button>
+      <button class="icon-btn" onclick="doLogout()" style="color:#f15c6d;">🚪</button>
+    </div>
+
+    <div class="chat-box" id="chat"></div>
+
+    <div class="input-area">
+      <input type="file" id="fileInput" style="display:none" onchange="sendFile()">
+      <button type="button" class="icon-btn" onclick="document.getElementById('fileInput').click()">📎</button>
+      <button type="button" class="icon-btn" id="recBtn" onclick="toggleRecord()">🎙️</button>
+      <input type="text" id="text" placeholder="Message">
+      <button onclick="sendText()">Send</button>
+    </div>
+  </div>
+
+  <!-- WEBRTC CALL MODAL -->
+  <div id="video-modal">
+    <h3 id="callStatus" style="color:white; margin-bottom:10px;">In Call...</h3>
+    <div style="display:flex; gap:10px; width:100%; justify-content:center;">
+      <video id="localVideo" class="call-stream" autoplay muted playsinline></video>
+      <video id="remoteVideo" class="call-stream" autoplay playsinline></video>
+    </div>
+    <button onclick="endCall()" style="background:red; padding:10px 20px; border:none; border-radius:8px; color:white; margin-top:15px; font-weight:bold;">End Call</button>
+  </div>
+
+  <script>
+    const socket = io();
+    let currentUser = null, rawMessages = [], mediaRecorder, audioChunks = [], pc, localStream;
+    const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    function cipher(str, key) {
+      if (!key) return "🔒 Encrypted Message";
+      return str.split('').map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ key.charCodeAt(i % key.length))).join('');
+    }
+
+    async function checkAuth() {
+      const res = await fetch('/api/me');
+      const data = await res.json();
+      if(data.authenticated) {
+        currentUser = data.username;
+        document.getElementById('loginSection').classList.add('hidden');
+        document.getElementById('chatSection').classList.remove('hidden');
+        socket.emit('join');
+        fetchMessages();
+      }
+    }
+
+    async function doLogin() {
+      const username = document.getElementById('loginUser').value;
+      const password = document.getElementById('loginPass').value;
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if(res.ok) {
+        checkAuth();
+      } else {
+        alert(data.message || 'Login failed');
+      }
+    }
+
+    async function doLogout() {
+      await fetch('/api/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    async function fetchMessages() {
+      const res = await fetch('/api/messages');
+      if(res.ok) {
+        rawMessages = await res.json();
+        decryptAll();
+      }
+    }
+
+    function decryptAll() {
+      const key = document.getElementById('searchKey').value;
+      const chat = document.getElementById('chat');
+      chat.innerHTML = '';
+      rawMessages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = 'msg ' + (m.sender === currentUser ? 'sent' : 'received');
+        
+        let content = '';
+        if (m.type === 'text') {
+          content = cipher(m.encryptedText, key);
+        } else if (m.type === 'audio') {
+          const src = cipher(m.fileData, key);
+          content = `<audio controls src="${src}"></audio>`;
+        } else if (m.type === 'file') {
+          const src = cipher(m.fileData, key);
+          content = `<a href="${src}" download="${m.fileName}" style="color:#00a884;">📄 ${m.fileName}</a>`;
+        }
+
+        div.innerHTML = `<div><b>${m.sender}</b>: ${content}</div><div class="time">${m.timestamp}</div>`;
+        chat.appendChild(div);
+      });
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function postMessage(payload) {
+      await fetch('/api/messages', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+    }
+
+    async function sendText() {
+      const key = document.getElementById('searchKey').value;
+      const text = document.getElementById('text').value;
+      if(!key) return alert('Enter secret key in top bar!');
+      if(!text) return;
+
+      await postMessage({ encryptedText: cipher(text, key), type: 'text' });
+      document.getElementById('text').value = '';
+    }
+
+    function sendFile() {
+      const key = document.getElementById('searchKey').value;
+      const file = document.getElementById('fileInput').files[0];
+      if(!key) return alert('Enter secret key in top bar!');
+      if(!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const encryptedData = cipher(reader.result, key);
+        await postMessage({ fileData: encryptedData, fileName: file.name, type: 'file' });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function toggleRecord() {
+      const key = document.getElementById('searchKey').value;
+      const btn = document.getElementById('recBtn');
+      if(!key) return alert('Enter secret key in top bar!');
+
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        btn.style.color = '#00a884';
+      } else {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onload = async () => {
+            const encryptedData = cipher(reader.result, key);
+            await postMessage({ fileData: encryptedData, type: 'audio' });
+          };
+          reader.readAsDataURL(blob);
+        };
+        mediaRecorder.start();
+        btn.style.color = 'red';
+      }
+    }
+
+    // --- WEBRTC CALLING ---
+    async function startCall(video) {
+      document.getElementById('video-modal').style.display = 'flex';
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: video });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      pc = new RTCPeerConnection(rtcConfig);
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      pc.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
+      pc.onicecandidate = e => {
+        if(e.candidate) socket.emit('call_user', { signal: pc.localDescription, from: currentUser, video });
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('call_user', { signal: offer, from: currentUser, video });
+    }
+
+    socket.on('incoming_call', async (data) => {
+      if (confirm(`Incoming ${data.video ? 'Video' : 'Audio'} call from ${data.from}. Accept?`)) {
+        document.getElementById('video-modal').style.display = 'flex';
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: data.video });
+        document.getElementById('localVideo').srcObject = localStream;
+
+        pc = new RTCPeerConnection(rtcConfig);
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+        pc.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
+        pc.onicecandidate = e => {
+          if(e.candidate) socket.emit('answer_call', { signal: pc.localDescription });
+        };
+
+        await pc.setRemoteDescription(new RTCSessionDescription(data.signal));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('answer_call', { signal: answer });
+      }
+    });
+
+    socket.on('call_accepted', async (signal) => {
+      if(pc) await pc.setRemoteDescription(new RTCSessionDescription(signal));
+    });
+
+    socket.on('call_ended', () => endCall(false));
+
+    function endCall(notify = true) {
+      if (notify) socket.emit('end_call');
+      if (pc) pc.close();
+      if (localStream) localStream.getTracks().forEach(t => t.stop());
+      document.getElementById('video-modal').style.display = 'none';
+    }
+
+    socket.on('new_message', () => fetchMessages());
+    checkAuth();
+  </script>
+</body>
+  </html>
