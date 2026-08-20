@@ -30,6 +30,7 @@ const P1_PASS = process.env.PARTNER_1_PASS || 'pass1234';
 const P2_NAME = process.env.PARTNER_2_NAME || 'Partner B';
 const P2_PASS = process.env.PARTNER_2_PASS || 'pass5678';
 const CHAT_SECRET_KEY = process.env.CHAT_SECRET_KEY || 'default_shared_secret_key';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234';
 
 async function getMegaStorage() {
   const email = process.env.MEGA_EMAIL;
@@ -105,6 +106,12 @@ function checkUserAuth(req, res, next) {
   res.status(401).json({ status: 'error', message: 'Unauthorized' });
 }
 
+function checkAdmin(req, res, next) {
+  if (req.session && req.session.isAdmin) return next();
+  res.status(401).send('Unauthorized Admin Access');
+}
+
+// --- USER AUTH ROUTES ---
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   const data = readData();
@@ -139,6 +146,34 @@ app.get('/api/me', (req, res) => {
   res.json({ authenticated: false });
 });
 
+// --- RESTORED ADMIN ROUTES ---
+app.post('/admin/login', (req, res) => {
+  if (req.body.password === ADMIN_PASSWORD) {
+    req.session.isAdmin = true;
+    return res.json({ status: 'ok' });
+  }
+  res.status(401).json({ status: 'error', message: 'Invalid Admin Password' });
+});
+
+app.get('/admin/download/json', checkAdmin, (req, res) => {
+  res.download(JSON_FILE_PATH, 'chat_database.json');
+});
+
+app.get('/admin/download/pdf', checkAdmin, (req, res) => {
+  const data = readData();
+  const doc = new PDFDocument();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename=chat_history.pdf');
+  doc.pipe(res);
+  doc.fontSize(18).text('Secret Chat Logs', { align: 'center' }).moveDown();
+  data.messages.forEach(m => {
+    doc.fontSize(10).fillColor('gray').text(`[${m.timestamp}] ${m.sender} (${m.type}):`);
+    doc.fontSize(12).fillColor('black').text(m.type === 'text' ? m.encryptedText : '[Encrypted Media/File]').moveDown(0.5);
+  });
+  doc.end();
+});
+
+// --- CHAT MESSAGES ROUTES ---
 app.get('/api/messages', checkUserAuth, (req, res) => res.json(readData().messages));
 
 app.post('/api/messages', checkUserAuth, async (req, res) => {
@@ -160,6 +195,7 @@ app.post('/api/messages', checkUserAuth, async (req, res) => {
   res.json(msg);
 });
 
+// --- WEBRTC SOCKET LOGIC ---
 io.on('connection', (socket) => {
   socket.on('join', () => socket.join('lovers_room'));
   socket.on('call_user', (data) => socket.to('lovers_room').emit('incoming_call', data));
