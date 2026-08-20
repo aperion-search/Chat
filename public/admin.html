@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Chat Logs</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: #0c1317; color: #e9edef; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+    .hidden { display: none !important; }
+    
+    .card { background: #111b21; border: 1px solid #222d34; padding: 32px; border-radius: 12px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    h2 { color: #00a884; margin-bottom: 20px; }
+    
+    input { width: 100%; padding: 12px; margin: 10px 0 20px 0; border-radius: 8px; border: 1px solid #222d34; background: #202c33; color: white; outline: none; font-size: 14px; }
+    input:focus { border-color: #00a884; }
+    
+    button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s ease; font-size: 14px; }
+    .btn-primary { background: #00a884; color: white; }
+    .btn-primary:hover { background: #008f70; }
+    .btn-secondary { background: #202c33; color: #e9edef; border: 1px solid #222d34; }
+    .btn-secondary:hover { background: #2a3942; }
+    .btn-danger { background: #f15c6d; color: white; margin-top: 16px; }
+    .btn-danger:hover { background: #d94c5e; }
+    
+    .status-box { background: #202c33; padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 13px; color: #8696a0; border-left: 4px solid #00a884; text-align: left; }
+    .error-msg { color: #f15c6d; font-size: 13px; margin-bottom: 12px; display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- ADMIN LOGIN CARD -->
+  <div id="loginCard" class="card">
+    <h2>Admin Panel</h2>
+    <div id="errorMsg" class="error-msg">Invalid password</div>
+    <input type="password" id="adminPassword" placeholder="Enter Admin Password" onkeypress="if(event.key==='Enter') doAdminLogin()">
+    <button class="btn-primary" onclick="doAdminLogin()">Log In</button>
+  </div>
+
+  <!-- ADMIN DASHBOARD CARD -->
+  <div id="dashboardCard" class="card hidden">
+    <h2>Export Chat Data</h2>
+    <div class="status-box">
+      <strong>Status:</strong> Authenticated as Admin<br>
+      Accessing server database logs...
+    </div>
+
+    <button class="btn-primary" onclick="downloadJSON()">📄 Download JSON Database</button>
+    <button class="btn-secondary" onclick="downloadPDF()">📕 Download PDF Export</button>
+    <button class="btn-danger" onclick="doAdminLogout()">Log Out</button>
+  </div>
+
+  <script>
+    async function doAdminLogin() {
+      const password = document.getElementById('adminPassword').value;
+      const errorMsg = document.getElementById('errorMsg');
+      errorMsg.style.display = 'none';
+
+      try {
+        const res = await fetch('/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        if (res.ok) {
+          document.getElementById('loginCard').classList.add('hidden');
+          document.getElementById('dashboardCard').classList.remove('hidden');
+        } else {
+          errorMsg.style.display = 'block';
+        }
+      } catch (err) {
+        alert('Server communication error.');
+      }
+    }
+
+    function downloadJSON() {
+      window.location.href = '/admin/download/json';
+    }
+
+    function downloadPDF() {
+      window.location.href = '/admin/download/pdf';
+    }
+
+    function doAdminLogout() {
+      location.reload();
+    }
+  </script>
+</body>
+  </html>
