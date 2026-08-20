@@ -29,14 +29,13 @@ const P1_NAME = process.env.PARTNER_1_NAME || 'Partner A';
 const P1_PASS = process.env.PARTNER_1_PASS || 'pass1234';
 const P2_NAME = process.env.PARTNER_2_NAME || 'Partner B';
 const P2_PASS = process.env.PARTNER_2_PASS || 'pass5678';
+const CHAT_SECRET_KEY = process.env.CHAT_SECRET_KEY || 'default_shared_secret_key';
 
-// Strict check: Only load megajs if both variables are non-empty strings
 async function getMegaStorage() {
   const email = process.env.MEGA_EMAIL;
   const password = process.env.MEGA_PASSWORD;
 
   if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password.trim()) {
-    console.log('MEGA credentials invalid or missing. Running with local disk storage.');
     return null;
   }
 
@@ -46,7 +45,6 @@ async function getMegaStorage() {
     await storage.ready;
     return storage;
   } catch (err) {
-    console.error('MEGA connection error:', err.message);
     return null;
   }
 }
@@ -59,12 +57,9 @@ async function syncFromMega() {
       if (file) {
         const data = await file.downloadBuffer();
         fs.writeFileSync(JSON_FILE_PATH, data);
-        console.log('Data synced from MEGA.');
       }
     }
-  } catch (err) {
-    console.error('Sync from MEGA failed:', err.message);
-  }
+  } catch (err) {}
 
   if (!fs.existsSync(JSON_FILE_PATH)) {
     fs.writeFileSync(JSON_FILE_PATH, JSON.stringify({ users: [], messages: [] }));
@@ -97,9 +92,7 @@ async function syncToMega() {
     
     const content = fs.readFileSync(JSON_FILE_PATH);
     await storage.upload(MEGA_FILE_NAME, content).complete;
-  } catch (err) {
-    console.error('Sync to MEGA failed:', err.message);
-  }
+  } catch (err) {}
 }
 
 function readData() {
@@ -110,11 +103,6 @@ function readData() {
 function checkUserAuth(req, res, next) {
   if (req.session && req.session.username) return next();
   res.status(401).json({ status: 'error', message: 'Unauthorized' });
-}
-
-function checkAdmin(req, res, next) {
-  if (req.session && req.session.isAdmin) return next();
-  res.status(401).send('Unauthorized');
 }
 
 app.post('/api/login', async (req, res) => {
@@ -140,35 +128,15 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', (req, res) => {
   if (req.session && req.session.username) {
-    return res.json({ authenticated: true, username: req.session.username });
+    const partner = req.session.username === P1_NAME ? P2_NAME : P1_NAME;
+    return res.json({ 
+      authenticated: true, 
+      username: req.session.username,
+      partnerName: partner,
+      secretKey: CHAT_SECRET_KEY 
+    });
   }
   res.json({ authenticated: false });
-});
-
-app.post('/admin/login', (req, res) => {
-  if (req.body.password === process.env.ADMIN_PASSWORD) {
-    req.session.isAdmin = true;
-    return res.json({ status: 'ok' });
-  }
-  res.status(401).json({ status: 'error' });
-});
-
-app.get('/admin/download/json', checkAdmin, (req, res) => {
-  res.download(JSON_FILE_PATH, 'chat_database.json');
-});
-
-app.get('/admin/download/pdf', checkAdmin, (req, res) => {
-  const data = readData();
-  const doc = new PDFDocument();
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', 'attachment; filename=chat_history.pdf');
-  doc.pipe(res);
-  doc.fontSize(18).text('Secret Chat Logs', { align: 'center' }).moveDown();
-  data.messages.forEach(m => {
-    doc.fontSize(10).fillColor('gray').text(`[${m.timestamp}] ${m.sender} (${m.type}):`);
-    doc.fontSize(12).fillColor('black').text(m.type === 'text' ? m.encryptedText : '[Encrypted Media/File]').moveDown(0.5);
-  });
-  doc.end();
 });
 
 app.get('/api/messages', checkUserAuth, (req, res) => res.json(readData().messages));
@@ -183,7 +151,7 @@ app.post('/api/messages', checkUserAuth, async (req, res) => {
     encryptedText,
     fileData: fileData || null,
     fileName: fileName || null,
-    timestamp: new Date().toLocaleTimeString()
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   };
   data.messages.push(msg);
   fs.writeFileSync(JSON_FILE_PATH, JSON.stringify(data, null, 2));
@@ -194,21 +162,12 @@ app.post('/api/messages', checkUserAuth, async (req, res) => {
 
 io.on('connection', (socket) => {
   socket.on('join', () => socket.join('lovers_room'));
-  
-  socket.on('call_user', (data) => {
-    socket.to('lovers_room').emit('incoming_call', { signal: data.signal, from: data.from, video: data.video });
-  });
-
-  socket.on('answer_call', (data) => {
-    socket.to('lovers_room').emit('call_accepted', data.signal);
-  });
-
-  socket.on('end_call', () => {
-    socket.to('lovers_room').emit('call_ended');
-  });
+  socket.on('call_user', (data) => socket.to('lovers_room').emit('incoming_call', data));
+  socket.on('answer_call', (data) => socket.to('lovers_room').emit('call_accepted', data.signal));
+  socket.on('end_call', () => socket.to('lovers_room').emit('call_ended'));
 });
 
 const PORT = process.env.PORT || 3000;
 syncFromMega().then(() => {
-  server.listen(PORT, () => console.log(`Server online on port ${PORT}`));
+  server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
